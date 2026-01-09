@@ -237,6 +237,7 @@ class AbsTaskClustering(AbsTask):
                 prediction_folder,
                 hf_subset=hf_subset,
                 hf_split=hf_split,
+                **kwargs,
             )
 
         v_measures = list(itertools.chain.from_iterable(all_v_scores.values()))

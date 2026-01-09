@@ -113,6 +113,7 @@ class AbsTaskSummarization(AbsTask):
                 prediction_folder,
                 hf_subset=hf_subset,
                 hf_split=hf_split,
+                **kwargs,
             )
         return evaluator._calculate_metrics(scores)
 

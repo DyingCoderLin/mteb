@@ -142,6 +142,9 @@ class AbsTask(ABC):
             TypeError: If the model is a CrossEncoder and the task does not support CrossEncoders.
             TypeError: If the model is a SearchProtocol and the task does not support Search.
         """
+        if kwargs.get("save_predictions", False) and prediction_folder is None:
+            prediction_folder = Path(kwargs.get("output_folder", "results"))
+
         if isinstance(model, CrossEncoderProtocol) and not self._support_cross_encoder:
             raise TypeError(
                 f"Model {model} is a CrossEncoder, but this task {self.metadata.name} does not support CrossEncoders. "
@@ -216,6 +219,7 @@ class AbsTask(ABC):
         prediction_folder: Path,
         hf_split: str,
         hf_subset: str,
+        **kwargs: Any,
     ) -> None:
         """Saves the predictions of the model on the task to a json file.
 
@@ -225,35 +229,59 @@ class AbsTask(ABC):
             prediction_folder: The folder to save the predictions to.
             hf_split: The split of the dataset (e.g. "test").
             hf_subset: The subset of the dataset (e.g. "en").
+            kwargs: Additional keyword arguments.
         """
-        predictions_path = self._predictions_path(prediction_folder)
-        existing_results: dict[str, Any] = {
-            "mteb_model_meta": {
-                "model_name": model.mteb_model_meta.name,
-                "revision": model.mteb_model_meta.revision,
-            }
-        }
-        if predictions_path.exists():
-            with predictions_path.open("r") as predictions_file:
-                existing_results = json.load(predictions_file)
+        top_k = kwargs.get("top_k", None)
+        if top_k is not None and isinstance(predictions, dict):
+            # for retrieval tasks, predictions is dict[str, dict[str, float]]
+            # where the first key is the query id and the second is the document id
+            # we want to filter the document ids by top_k
+            filtered_predictions = {}
+            for qid, rels in predictions.items():
+                if isinstance(rels, dict):
+                    doc_ids = sorted(rels, key=lambda x: rels[x], reverse=True)[:top_k]
+                    filtered_predictions[qid] = {k: v for k, v in rels.items() if k in doc_ids}
+                else:
+                    filtered_predictions[qid] = rels
+            predictions = filtered_predictions
 
-        if hf_subset not in existing_results:
-            existing_results[hf_subset] = {}
+        # 清理 kwargs 以避免与 _predictions_path 的位置参数冲突
+        path_kwargs = kwargs.copy()
+        for key in ["output_folder", "prediction_folder"]:
+            if key in path_kwargs:
+                path_kwargs.pop(key)
 
-        existing_results[hf_subset][hf_split] = predictions
+        # 保持与旧版格式一致：文件名包含 subset，内容直接为 predictions
+        file_name = f"{self.metadata.name}_{hf_subset}_predictions.json"
+        prediction_name = kwargs.get("prediction_name")
+        if prediction_name:
+            file_name = file_name.replace(".json", f"_{prediction_name}.json")
+        
+        predictions_path = prediction_folder / file_name
+        
+        if not prediction_folder.exists():
+            prediction_folder.mkdir(parents=True, exist_ok=True)
+
         with predictions_path.open("w") as predictions_file:
-            json.dump(existing_results, predictions_file)
+            json.dump(predictions, predictions_file)
 
     def _predictions_path(
         self,
         output_folder: Path | str,
+        **kwargs: Any,
     ) -> Path:
         if isinstance(output_folder, str):
             output_folder = Path(output_folder)
 
         if not output_folder.exists():
             output_folder.mkdir(parents=True, exist_ok=True)
-        return output_folder / self.prediction_file_name
+
+        file_name = self.prediction_file_name
+        prediction_name = kwargs.get("prediction_name")
+        if prediction_name:
+            file_name = file_name.replace(".json", f"_{prediction_name}.json")
+
+        return output_folder / file_name
 
     @property
     def prediction_file_name(self) -> str:

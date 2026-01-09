@@ -346,15 +346,22 @@ class AbsTaskRetrieval(AbsTask):
                 data_split["relevant_docs"], data_split["queries"]
             )
         )
+
+        top_k = kwargs.get("top_k", self._top_k)
+        retriever_kwargs = kwargs.copy()
+        for key in ["top_k", "corpus", "queries", "task_metadata", "hf_split", "hf_subset", "top_ranked"]:
+            if key in retriever_kwargs:
+                retriever_kwargs.pop(key)
+
         retriever = RetrievalEvaluator(
-            corpus=data_split["corpus"],
-            queries=data_split["queries"],
-            task_metadata=self.metadata,
-            hf_split=hf_split,
-            hf_subset=hf_subset,
-            top_ranked=data_split["top_ranked"],
-            top_k=self._top_k,
-            **kwargs,
+            data_split["corpus"],
+            data_split["queries"],
+            self.metadata,
+            hf_split,
+            hf_subset,
+            top_k,
+            data_split["top_ranked"],
+            **retriever_kwargs,
         )
 
         search_model: SearchProtocol
@@ -387,6 +394,7 @@ class AbsTaskRetrieval(AbsTask):
                 prediction_folder,
                 hf_subset=hf_subset,
                 hf_split=hf_split,
+                **kwargs,
             )
 
         logger.info("Running retrieval task - Evaluating retrieval scores...")

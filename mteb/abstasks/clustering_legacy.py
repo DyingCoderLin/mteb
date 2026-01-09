@@ -131,6 +131,7 @@ class AbsTaskClusteringLegacy(AbsTask):
                     prediction_folder,
                     hf_subset=hf_subset,
                     hf_split=hf_split,
+                    **kwargs,
                 )
             v_measures = [m["v_measure"] for m in all_metrics]
             v_mean = np.mean(v_measures)
@@ -159,6 +160,7 @@ class AbsTaskClusteringLegacy(AbsTask):
                 prediction_folder,
                 hf_subset=hf_subset,
                 hf_split=hf_split,
+                **kwargs,
             )
 
         return self._compute_metrics(

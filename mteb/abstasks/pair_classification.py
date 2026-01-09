@@ -114,6 +114,7 @@ class AbsTaskPairClassification(AbsTask):
                 prediction_folder,
                 hf_subset=hf_subset,
                 hf_split=hf_split,
+                **kwargs,
             )
         return self._compute_metrics(
             similarity_scores, data_split[self.label_column_name]

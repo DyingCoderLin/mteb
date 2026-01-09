@@ -186,6 +186,7 @@ class AbsTaskMultilabelClassification(AbsTaskClassification):
                 prediction_folder,
                 hf_subset=hf_subset,
                 hf_split=hf_split,
+                **kwargs,
             )
 
         avg_scores: dict[str, Any] = {

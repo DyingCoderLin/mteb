@@ -36,11 +36,13 @@ class SearchEncoderWrapper:
         model: EncoderProtocol,
         corpus_chunk_size: int = 50_000,
         index_backend: IndexEncoderSearchProtocol | None = None,
+        query_chunk_size: int = 100,  # 默认每次处理 100 条 query
     ) -> None:
         self.model = model
         self.task_corpus = None
         self.mteb_model_meta = model.mteb_model_meta
         self.corpus_chunk_size = corpus_chunk_size
+        self.query_chunk_size = query_chunk_size
         self.index_backend = index_backend
 
     def index(
@@ -251,32 +253,54 @@ class SearchEncoderWrapper:
             )
 
             # Compute similarities using either cosine-similarity or dot product
-            logger.info("Computing Similarities...")
-            scores = self.model.similarity(query_embeddings, sub_corpus_embeddings)
+            print("\n" + "="*50 + "\nUSING FORCED CHUNKED SIMILARITY (FIVES FIX)\n" + "="*50)
+            logger.info(f"Computing Similarities in query chunks (size {self.query_chunk_size})...")
+            
+            # 确保 query_embeddings 在 CPU 上，防止 GPU 堆积
+            query_embeddings_torch = torch.as_tensor(query_embeddings)
+            sub_corpus_embeddings_torch = torch.as_tensor(sub_corpus_embeddings)
 
-            # get top-k values
-            cos_scores_top_k_values_tensor, cos_scores_top_k_idx_tensor = torch.topk(
-                torch.as_tensor(scores),
-                min(
-                    top_k + 1,
-                    len(scores[1]) if len(scores) > 1 else len(scores[-1]),
-                ),
-                dim=1,
-                largest=True,
-            )
-            cos_scores_top_k_idx = cos_scores_top_k_idx_tensor.cpu().tolist()
-            cos_scores_top_k_values = cos_scores_top_k_values_tensor.cpu().tolist()
+            # 分块处理 query，避免一次性生成巨大相似度矩阵
+            num_queries = len(query_idx_to_id)
+            for q_start in range(0, num_queries, self.query_chunk_size):
+                q_end = min(q_start + self.query_chunk_size, num_queries)
+                sub_query_embeddings = query_embeddings_torch[q_start:q_end]
+                
+                # 计算相似度子矩阵: [query_chunk, corpus_chunk]
+                # 这里会产生 [100, 50000] 的小矩阵，仅需 ~20MB
+                scores = self.model.similarity(sub_query_embeddings, sub_corpus_embeddings_torch)
+                scores_tensor = torch.as_tensor(scores)
 
-            sub_corpus_ids = list(sub_corpus_ids)
-            result_heaps = self._sort_full_corpus_results(
-                result_heaps=result_heaps,
-                query_idx_to_id=query_idx_to_id,
-                query_embeddings=query_embeddings,
-                cos_scores_top_k_idx=cos_scores_top_k_idx,
-                cos_scores_top_k_values=cos_scores_top_k_values,
-                sub_corpus_ids=sub_corpus_ids,
-                top_k=top_k,
-            )
+                # get top-k values for this chunk
+                cos_scores_top_k_values_tensor, cos_scores_top_k_idx_tensor = torch.topk(
+                    scores_tensor,
+                    min(
+                        top_k + 1,
+                        scores_tensor.shape[1],
+                    ),
+                    dim=1,
+                    largest=True,
+                )
+                cos_scores_top_k_idx = cos_scores_top_k_idx_tensor.cpu().tolist()
+                cos_scores_top_k_values = cos_scores_top_k_values_tensor.cpu().tolist()
+
+                # 仅更新这一批 query 的结果堆
+                for i, q_idx in enumerate(range(q_start, q_end)):
+                    query_id = query_idx_to_id[q_idx]
+                    for sub_corpus_id, score in zip(cos_scores_top_k_idx[i], cos_scores_top_k_values[i]):
+                        corpus_id = sub_corpus_ids[sub_corpus_id]
+                        if len(result_heaps[query_id]) < top_k:
+                            heapq.heappush(result_heaps[query_id], (score, corpus_id))
+                        else:
+                            heapq.heappushpop(result_heaps[query_id], (score, corpus_id))
+                
+                # 显式清理
+                del scores_tensor, cos_scores_top_k_values_tensor, cos_scores_top_k_idx_tensor
+            
+            # 清理这一块 Corpus 的显存
+            del sub_corpus_embeddings_torch
+            torch.cuda.empty_cache()
+
         return result_heaps
 
     def _sort_full_corpus_results(
